@@ -4,8 +4,10 @@ import (
 	"backend/models"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -87,6 +89,36 @@ func (app *application) getAllMoviesByGenre(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+func (app *application) deleteMovie(w http.ResponseWriter, r *http.Request) {
+	params := httprouter.ParamsFromContext(r.Context())
+
+	id, err := strconv.Atoi(params.ByName("id"))
+	if err != nil {
+		app.errorJSON(w, err)
+		return
+	}
+
+	err = app.models.DB.DeleteMovie(id)
+	if err != nil {
+		app.errorJSON(w, err)
+		return
+	}
+
+	ok := jsonResp{
+		OK: true,
+	}
+
+	err = app.writeJSON(w, http.StatusOK, ok, "response")
+	if err != nil {
+		app.errorJSON(w, err)
+		return
+	}
+}
+
+func (app *application) insertMovie(w http.ResponseWriter, r *http.Request) {
+
+}
+
 type MoviePayload struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
@@ -98,8 +130,7 @@ type MoviePayload struct {
 	MPAARating  string `json:"mpaa_rating"`
 }
 
-func (app *application) editmovie(w http.ResponseWriter, r *http.Request) {
-
+func (app *application) editMovie(w http.ResponseWriter, r *http.Request) {
 	var payload MoviePayload
 
 	err := json.NewDecoder(r.Body).Decode(&payload)
@@ -129,6 +160,10 @@ func (app *application) editmovie(w http.ResponseWriter, r *http.Request) {
 	movie.CreatedAt = time.Now()
 	movie.UpdatedAt = time.Now()
 
+	if movie.Poster == "" {
+		movie = getPoster(movie)
+	}
+
 	if movie.ID == 0 {
 		err = app.models.DB.InsertMovie(movie)
 		if err != nil {
@@ -154,36 +189,61 @@ func (app *application) editmovie(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (app *application) deleteMovie(w http.ResponseWriter, r *http.Request) {
-	params := httprouter.ParamsFromContext(r.Context())
+func getPoster(movie models.Movie) models.Movie {
+	type TheMovieDB struct {
+		Page    int `json:"page"`
+		Results []struct {
+			Adult            bool    `json:"adult"`
+			BackdropPath     string  `json:"backdrop_path"`
+			GenreIds         []int   `json:"genre_ids"`
+			ID               int     `json:"id"`
+			OriginalLanguage string  `json:"original_language"`
+			OriginalTitle    string  `json:"original_title"`
+			Overview         string  `json:"overview"`
+			Popularity       float64 `json:"popularity"`
+			PosterPath       string  `json:"poster_path"`
+			ReleaseDate      string  `json:"release_date"`
+			Title            string  `json:"title"`
+			Video            bool    `json:"video"`
+			VoteAverage      float64 `json:"vote_average"`
+			VoteCount        int     `json:"vote_count"`
+		} `json:"results"`
+		TotalPages   int `json:"total_pages"`
+		TotalResults int `json:"total_results"`
+	}
 
-	id, err := strconv.Atoi(params.ByName("id"))
+	client := &http.Client{}
+	key := "8cd76df6ab05a8e99d25ea65d51066aa"
+	theUrl := "https://api.themoviedb.org/3/search/movie?api_key="
+	log.Println(theUrl + key + "&query=" + url.QueryEscape(movie.Title))
+
+	req, err := http.NewRequest("GET", theUrl+key+"&query="+url.QueryEscape(movie.Title), nil)
 	if err != nil {
-		app.errorJSON(w, err)
-		return
+		log.Println(err)
+		return movie
 	}
 
-	err = app.models.DB.DeleteMovie(id)
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
-		app.errorJSON(w, err)
-		return
+		log.Println(err)
+		return movie
 	}
-
-	ok := jsonResp{
-		OK: true,
-	}
-
-	err = app.writeJSON(w, http.StatusOK, ok, "response")
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		app.errorJSON(w, err)
-		return
+		log.Println(err)
+		return movie
 	}
-}
 
-func (app *application) updateMovie(w http.ResponseWriter, r *http.Request) {
+	var responseObject TheMovieDB
 
-}
+	json.Unmarshal(bodyBytes, &responseObject)
 
-func (app *application) searchMovie(w http.ResponseWriter, r *http.Request) {
+	if len(responseObject.Results) > 0 {
+		movie.Poster = responseObject.Results[0].PosterPath
+	}
 
+	return movie
 }
